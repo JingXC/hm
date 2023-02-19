@@ -9,6 +9,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
+import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -36,18 +37,24 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    @Resource
+    private CacheClient cacheClient;
+
     @Override
     public Result queryById(Long id) {
 
-        //互斥锁解决缓存击穿
-        //Shop shop = queryWithPassThrough(id);
+        //解决缓存穿透
+        //cacheClient.queryWithPassThrough(CACHE_SHOP_KEY,id,Shop.class,this::getById,CACHE_SHOP_TTL,TimeUnit.MINUTES);
 
         //逻辑过期解决缓存击穿
-        Shop shop = queryWithLogicalExpire(id);
+        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, 20L, TimeUnit.SECONDS);
+        if (shop == null) {
+            return Result.fail("店铺不存在");
+        }
         return Result.ok(shop);
     }
 
-    private Shop queryWithPassThrough(Long id) {
+    private Shop queryWithMutex(Long id) {
         String key = CACHE_SHOP_KEY + id;
         String s = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
 
@@ -66,7 +73,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             boolean lock = isLock(lockKey);
             if (!lock) {
                 Thread.sleep(50);
-                queryWithPassThrough(id);
+                queryWithMutex(id);
             }
 
             shop = getById(id);
